@@ -55,6 +55,18 @@ void PX4CtrlFSM::process()
 {
   // 获取当前时间
   rclcpp::Time now_time = node_->now();
+  // Consume LAND once, before service waits can process more incoming messages.
+  // TAKEOFF remains pending until its existing OFFBOARD handshake completes.
+  const bool land_requested = takeoff_land_data.triggered &&
+    takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND;
+  if (land_requested) {
+    takeoff_land_data.triggered = false;
+    if (state != AUTO_HOVER && state != CMD_CTRL) {
+      RCLCPP_ERROR(
+        node_->get_logger(), "Reject AUTO_LAND, which must be triggered in AUTO_HOVER.");
+    }
+  }
+
   Controller_Output_t u;                  // 控制输出
   Desired_State_t des(odom_data);        // 期望状态
   bool rotor_low_speed_during_land = false;   // 降落时电机是否低速运行标志
@@ -279,6 +291,10 @@ void PX4CtrlFSM::process()
       {
         // 如果遥控器没有进入悬停模式或者没有收到里程计数据
         if (!rc_data.is_hover_mode || !odom_is_received(now_time)) {
+          if (land_requested) {
+            RCLCPP_ERROR(
+              node_->get_logger(), "Reject AUTO_LAND because hover mode or odometry is unavailable.");
+          }
           state = MANUAL_CTRL;              // 切换到手动控制模式
           toggle_offboard_mode(false);              // 关闭offboard模式
 
@@ -286,6 +302,10 @@ void PX4CtrlFSM::process()
         }
         // 如果遥控器进入指令模式并且收到指令数据
         else if (rc_data.is_command_mode && cmd_is_received(now_time)) {
+          if (land_requested) {
+            RCLCPP_ERROR(
+              node_->get_logger(), "Reject AUTO_LAND while control commands are active. Stop sending commands first.");
+          }
           if (state_data.current_state.mode == "OFFBOARD") {
             state = CMD_CTRL;                    // 切换到指令控制模式
             des = get_cmd_des();                    // 获取指令期望状态
@@ -293,16 +313,13 @@ void PX4CtrlFSM::process()
               node_->get_logger(), "\033[32m[px4ctrl] AUTO_HOVER(L2) --> CMD_CTRL(L3)\033[0m");
           }
         }
-        // 如果起飞降落数据触发并且起飞降落指令为降落
-        else if (takeoff_land_data.triggered &&
-          takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND)
-        {
-          // 如果起飞降落数据触发并且起飞降落指令为降落
-          state = AUTO_LAND;              // 切换到自动降落模式
-          set_start_pose_for_takeoff_land(odom_data);              // 设置起飞降落起始位置
+        else if (land_requested) {
+          state = AUTO_LAND;
+          set_start_pose_for_takeoff_land(odom_data);
 
           RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] AUTO_HOVER(L2) --> AUTO_LAND\033[0m");
-        } else {
+        }
+        else {
           set_hov_with_rc();              // 设置悬停位置
           des = get_hover_des();              // 获取悬停期望状态
           if ((rc_data.enter_command_mode) ||
@@ -335,8 +352,7 @@ void PX4CtrlFSM::process()
           des = get_cmd_des();
         }
 
-        if (takeoff_land_data.triggered &&
-          takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND)
+        if (land_requested)
         {
           RCLCPP_ERROR(
             node_->get_logger(), "Reject AUTO_LAND, which must be triggered in AUTO_HOVER. \
@@ -450,7 +466,6 @@ void PX4CtrlFSM::process()
   // rc_data.enter_hover_mode = false;
   rc_data.enter_command_mode = false;
   // rc_data.toggle_reboot = false;
-  // takeoff_land_data.triggered = false;
 }
 
 void PX4CtrlFSM::motors_idling(const Imu_Data_t & imu, Controller_Output_t & u)
