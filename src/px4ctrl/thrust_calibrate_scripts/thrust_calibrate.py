@@ -10,6 +10,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import AttitudeTarget
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
 
 
@@ -34,13 +35,16 @@ class ThrustCalibration(Node):
         self.stopped = False
 
         self.bat_sub = self.create_subscription(
-            BatteryState, "/mavros/battery", self.battery_voltage_cb, 10
+            BatteryState,
+            "/mavros/battery",
+            self.battery_voltage_cb,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
             AttitudeTarget,
             "/mavros/setpoint_raw/attitude",
             self.thrust_commands_cb,
-            10,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
             PoseStamped, "/traj_start_trigger", self.start_trigger_cb, 10
